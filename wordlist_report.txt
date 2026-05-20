@@ -1,0 +1,36 @@
+Mutation logic:
+- Prefix fixed to 2023_1 and extension .SQL.
+- Generated ordered templates with common enterprise SQL patterns first (backup, migration, schema, deployment, release).
+- Applied status, version, date, environment, and cadence suffixes in realistic sequences.
+- Added ERP/CRM/finance/payroll domains and Turkish enterprise terms (muhasebe, fatura, efatura, bordro, etc.).
+- Mutated separators in priority order: '_' then '-' then '.' then space.
+- Deduplicated while preserving order to keep highest-probability entries first.
+
+Estimated collision likelihood:
+- Medium-high (approx. 30–45%) given multiple 2023_1* SQL scripts and ~64841 ordered candidates.
+
+Best filename guesses:
+- 2023_1_backup.SQL
+- 2023_1_migration.SQL
+- 2023_1_schema.SQL
+- 2023_1_deployment.SQL
+- 2023_1_deploy.SQL
+- 2023_1_release.SQL
+- 2023_1_rollback.SQL
+- 2023_1_restore.SQL
+- 2023_1_upgrade.SQL
+- 2023_1_patch.SQL
+- 2023_1_export.SQL
+- 2023_1_import.SQL
+- 2023_1_sync.SQL
+- 2023_1_archive.SQL
+- 2023_1_prod.SQL
+- 2023_1_production.SQL
+- 2023_1_staging.SQL
+- 2023_1_test.SQL
+- 2023_1_dev.SQL
+- 2023_1_erp.SQL
+
+Notes:
+- wordlist.txt is the full, ffuf-ready, deduplicated list.
+- wordlist_top100.txt contains the top 100 highest-probability entries.
